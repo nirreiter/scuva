@@ -111,7 +111,7 @@ def make_legend(
     label_order = list(label_color_dict.keys())
     if sort_ints:
         try:
-            label_order = sorted(label_order, key=int)
+            label_order = sorted(label_order, key=int, reverse=True) # reverse = True so integers increase from the bottom
         except (TypeError, ValueError):
             pass
     
