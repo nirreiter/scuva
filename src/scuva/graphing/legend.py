@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable

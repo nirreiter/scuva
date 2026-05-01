@@ -65,7 +65,7 @@ sc.tl.leiden(adata, resolution=0.5)
 scv.umap(adata, "leiden", legend_loc="right")
 ```
 
-For a fuller worked example, see the notebook in `example/scuva_test.ipynb`.
+For a fuller worked example, see the notebook in `test/scuva_test.ipynb`.
 
 ## Core workflows
 

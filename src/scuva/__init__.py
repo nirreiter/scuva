@@ -1,6 +1,6 @@
 """Public package exports for scuva."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.0rc1"
 
 from .text import wrap_join, rename, clean_title
 from .graphing import set_categorical_colors, get_categorical_colormap, subplots_with_side_axis

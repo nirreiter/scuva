@@ -1,4 +1,5 @@
 """UMAP plotting helpers for categorical and continuous single-cell features."""
+from __future__ import annotations
 
 from matplotlib import pyplot as plt
 from matplotlib import colors as mplc

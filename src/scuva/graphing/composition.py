@@ -1,4 +1,5 @@
 """Composition-style plots for summarizing categorical observations."""
+from __future__ import annotations
 
 from typing import Any
 
@@ -19,11 +20,11 @@ def graph_proportions(
     x: str,
     y: str,
     x_order: list | np.ndarray | None = None,
-    figsize: tuple[int, int] = (2, 4),
+    figsize: tuple[int, int] = (3, 6),
     legend_proportion: float = 0.1,
     x_tick_rotation: int = 0,
     percentages_fontsize: int = 8,
-    percentages_color: str = "#0000000",
+    percentages_color: str = "#000000",
     percentages_outline_width: float = 0.5,
     percentages_outline_color: str = "#dddddd",
     percentages_decimal_places: int = 2,
@@ -72,7 +73,7 @@ def graph_proportions(
         raise ValueError(f"'{y}' not in adata.obs")
     df = crosstab(adata.obs[x], adata.obs[y])
     if x_order is not None:
-        df = df.loc[:, x_order]
+        df = df.loc[x_order, :]
     
     fig = plt.figure(figsize=figsize, dpi=DPI)
     axes, side_ax = subplots_with_side_axis(fig, 1, 1, "vertical", legend_proportion)
@@ -118,7 +119,6 @@ def graph_proportions(
         
         bottom += df[ct]
     
-    ax.set_xlim((-0.5, 1.5))
     ax.set_ylim((0, 100))
     ax.grid(False)
     ax.set_ylabel("Percent of Cells")
@@ -134,7 +134,7 @@ def graph_proportions(
     
     make_legend(
         ax=side_ax,
-        label_color_dict=colormap,
+        label_color_dict=dict(reversed(colormap.items())),
         title=clean_title(rename(adata, y)),
         label_rename_dict={l: clean_title(rename(adata, l)) for l in colormap.keys()}
     )
@@ -148,7 +148,7 @@ def graph_counts(
     x_order: list | np.ndarray | None = None,
     stack: bool = False,
     sort_by_size: bool = True,
-    figsize=(8, 4),
+    figsize=(6, 3),
     legend_proportion: float = 0.1,
     x_tick_rotation: int = 90,
     legend_kwargs: dict[str, Any] | None = None
@@ -194,7 +194,7 @@ def graph_counts(
         df = df.sort_values("total", ascending=False)
         df = df.drop(columns="total")
     elif x_order is not None:
-        df = df.loc[:, x_order]
+        df = df.loc[x_order, :]
     
     _set_default_colors_categorical(adata, hue)
     colormap = get_categorical_colormap(adata, hue)

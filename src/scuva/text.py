@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from anndata import AnnData
 
 def wrap_join(items, sep=" ", width=30) -> str:

@@ -1,4 +1,9 @@
+*.DS_Store
+
 .vscode/
 __pycache__/
 *.egg-info/
+
 data/
+dist/
+test/venv/
