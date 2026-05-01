@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools >= 82.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scuva"
+dynamic = ["version"]
+authors = [
+  { name="Nir Reiter", email="nirreiter195@gmail.com" },
+]
+description = "Single-cell plotting helpers for scanpy and anndata workflows"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "GPL-3.0-or-later"
+license-files = ["LICEN[CS]E*"]
+dependencies = [
+  "numpy",
+  "pandas",
+  "anndata",
+  "scanpy",
+  "matplotlib",
+]
+
+[project.urls]
+Homepage = "https://github.com/nirreiter/scuva"
+Issues = "https://github.com/nirreiter/scuva/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "scuva.__version__"}
+
+# [tool.setuptools.package-data]
+# scuva = ["database/data/**/*.csv"]
