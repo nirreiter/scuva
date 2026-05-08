@@ -36,6 +36,9 @@ The package metadata currently lists these runtime dependencies:
 - Categorical plotting functions expect the relevant `adata.obs` column to use a pandas categorical dtype.
 - Category colors are stored in the `adata.uns[f"{feature}_colors"]` entry.
 - Optional display renaming can be stored in `adata.uns["rename_dict"]`.
+- `graph_proportions`, `set_categorical_colors`, and most categorical legend helpers expect the relevant observation columns to be pandas categoricals.
+- `graph_counts` also expects `hue` to be categorical because colors are read from `adata.obs[hue].cat.categories`.
+- `get_expression_by_obs` forwards its `layer` argument to `scanpy.tl.rank_genes_groups` and uses the same matrix again when attaching summary columns.
 
 If a helper depends on one of these conventions, the function usually raises a `ValueError` with a direct explanation when the input does not match.
 
@@ -91,6 +94,12 @@ Use `multiple_umap` to compare several features or several `AnnData` objects in 
 scv.multiple_umap(adata, ["leiden", "MS4A1"], legend_loc="right")
 ```
 
+Current behavior to keep in mind:
+
+- `legend_loc` may be a single value or a list that is cycled across panels.
+- `multiple_umap` currently lays out at most two plotted panels per row reliably, so `ncols` should stay at `1` or `2`.
+- `bottom_points` is available on `umap`, but `multiple_umap` does not expose that control to individual panels.
+
 Use `umap_split` to create one panel per group.
 
 ```python
@@ -103,6 +112,8 @@ scv.umap_split(
 )
 ```
 
+`umap_split` uses the order returned by `adata.obs[group_key].unique()` when building panels. For continuous features it applies one shared color scale across all panels. For categorical features, the subplot colors come from the usual AnnData-stored or default category colors.
+
 ### Composition plots
 
 `graph_counts` plots raw counts and `graph_proportions` plots percentages.
@@ -113,6 +124,30 @@ scv.graph_proportions(adata, x="sample", y="leiden", figsize=(3, 6))
 ```
 
 These functions return the summary table together with the figure and axes, which makes them easy to reuse in reports or downstream scripts.
+
+### Marker inspection
+
+Use `get_expression_by_obs` to run `scanpy.tl.rank_genes_groups` and attach two summary columns to the ranked-gene output:
+
+- `percent_expressing`: percentage of cells with nonzero raw counts.
+- `average_expression`: `log1p(mean(expression))` for the requested expression source.
+
+If `layer=None`, the function assumes `adata.X` contains integer count data and does not reverse any prior `log1p` transform.
+For a typical Scanpy workflow where `adata.X` contains normalized values, pass the layer name that contains raw integer count data.
+
+```python
+markers = scv.get_expression_by_obs(adata, "leiden", layer="counts")
+
+scv.check_expression(
+	adata,
+	markers,
+	features=["MS4A1", "CD79A"],
+	cluster_column="leiden",
+	score_threshold=2,
+)
+```
+
+`check_expression` prints the selected marker rows and then draws a small UMAP panel set containing the grouping column plus each requested gene.
 
 ### Colors and labels
 
@@ -146,19 +181,24 @@ That renaming is applied by helpers such as `rename`, `umap`, `graph_counts`, an
 
 ### Plotting
 
-- `umap(adata, feature, ...)`
-- `multiple_umap(adata, features, ...)`
-- `umap_split(adata, feature, group_key, ...)`
-- `graph_counts(adata, hue, x, ...)`
-- `graph_proportions(adata, x, y, ...)`
+- `umap(adata, feature, use_raw=False, layer=None, legend_loc="on data", vmin=None, vmax=None, vcenter=None, bottom_points=None, ...)`
+- `multiple_umap(adata, features, layer=None, ncols=2, legend_loc="on data", ...)`
+- `umap_split(adata, feature, group_key, legend_orientation="horizontal", ncols=2, ...)`
+- `graph_counts(adata, hue, x, stack=False, sort_by_size=True, ...)`
+- `graph_proportions(adata, x, y, x_order="sort", combine_small_percentages_other=False, ...)`
+
+### Analysis
+
+- `get_expression_by_obs(adata, column, layer="counts")`
+- `check_expression(adata, expression_by_obs_df, features, cluster_column="cluster", cluster_subset=None, score_threshold=None)`
 
 ### Legends and color helpers
 
 - `set_categorical_colors(adata, feature, color_mapping)`
 - `get_categorical_colormap(adata, feature)`
-- `make_legend(ax, title, label_color_dict, ...)`
-- `make_colorbar(sm, cax, label, ...)`
-- `subplots_with_side_axis(fig, nrows, ncols, side_ax_direction, side_ax_proportion)`
+- `make_legend(ax, title, label_color_dict, sort_ints="forward", ...)`
+- `make_colorbar(sm, cax, label, orientation="vertical", ...)`
+- `subplots_with_legend_axis(fig, total_subplots, nrows, ncols, side_ax_orientation, side_ax_proportion, use_extra_subplot_axis=True)`
 
 ### Text helpers
 

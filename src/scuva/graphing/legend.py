@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Literal
 
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
@@ -14,12 +15,13 @@ def make_colorbar(
     sm: ScalarMappable, 
     cax: Axes, 
     label: str,
+    orientation: Literal["vertical", "horizontal"] = "vertical",
     ticks: npt.ArrayLike | None = None,
     vmin: float | None = None,
     vmax: float | None = None,
     vcenter: float | None = None,
-    label_fontsize: float = 14,
-    tick_fontsize: float = 10,
+    label_fontsize: float = 10,
+    tick_fontsize: float = 8,
     **kwargs
 ) -> Colorbar:
     """Draw a colorbar with consistent labeling and endpoint tick handling.
@@ -32,6 +34,8 @@ def make_colorbar(
         Axes that should contain the colorbar.
     label
         Text label shown alongside the colorbar.
+    orientation
+        Direction of the colorbar.
     ticks
         Optional explicit tick locations. If omitted, ticks are inferred from the
         colorbar and adjusted so the upper endpoint is labeled cleanly.
@@ -45,8 +49,13 @@ def make_colorbar(
         Font size for tick labels.
     **kwargs
         Additional keyword arguments forwarded to ``matplotlib.pyplot.colorbar``.
+
+    Notes
+    -----
+    When explicit ``ticks`` are omitted but ``vmin`` and ``vmax`` are provided,
+    the helper rewrites the endpoint tick so the upper bound is labeled at ``vmax``.
     """
-    cbar = plt.colorbar(sm, cax=cax, **kwargs)
+    cbar = plt.colorbar(sm, cax=cax, orientation=orientation, **kwargs)
     cbar.set_label(label, fontsize=label_fontsize)
     cbar.ax.tick_params(labelsize=tick_fontsize)
     if ticks is not None:
@@ -62,7 +71,12 @@ def make_colorbar(
                 inferred_ticks = inferred_ticks[:-1] + [vmax]
             cbar.set_ticks(inferred_ticks, labels=[f"{tick:.2f}" for tick in inferred_ticks])
     if vmin is not None and vmax is not None:
-        cbar.ax.set_ylim(vmin, vmax)
+        if orientation == "vertical":
+            cbar.ax.set_ylim(vmin, vmax)
+        elif orientation == "horizontal":
+            cbar.ax.set_xlim(vmin, vmax)
+        else:
+            raise ValueError(f"Invalid value '{orientation}' for orientation")
     return cbar
 
 
@@ -70,13 +84,15 @@ def make_legend(
     ax: Axes,
     title: str,
     label_color_dict: dict,
-    sort_ints: bool = True,
+    sort_ints: Literal["no", "forward", "reverse"] = "forward",
     label_rename_dict: dict | None = None,
     loc: str = "center left",
     markersize: float = 6,
-    fontsize: int = 12,
-    title_fontsize: int = 14,
-    text_wrap_chars: int | None = 15,
+    fontsize: int = 8,
+    title_fontsize: int = 10,
+    text_wrap: int | bool = True,
+    ncols: int = 1,
+    **kwargs
 ) -> Legend:
     """Draw a simple square-marker legend on a dedicated axis.
 
@@ -100,8 +116,14 @@ def make_legend(
         Font size for legend labels.
     title_fontsize
         Font size for the legend title.
-    text_wrap_chars
-        Optional wrap width applied to the title.
+    text_wrap
+        If ``True``, wrap the title to the length of the longest legend label. If
+        an integer is provided, wrap the title to that width. If ``False``, leave
+        the title unchanged.
+    ncols
+        Number of legend columns.
+    **kwargs
+        Additional keyword arguments forwarded to ``Axes.legend``.
 
     Returns
     -------
@@ -109,9 +131,9 @@ def make_legend(
         The created legend object.
     """
     label_order = list(label_color_dict.keys())
-    if sort_ints:
+    if sort_ints != "no":
         try:
-            label_order = sorted(label_order, key=int, reverse=True) # reverse = True so integers increase from the bottom
+            label_order = sorted(label_order, key=int, reverse=sort_ints=="reverse") # reverse = True so integers increase from the bottom
         except (TypeError, ValueError):
             pass
     
@@ -124,16 +146,19 @@ def make_legend(
                 label=label_rename_dict[label], markersize=markersize)
         for label in label_order
     ]
-    
-    if text_wrap_chars is not None:
-        title = textwrap.fill(title, text_wrap_chars)
+    if text_wrap is True:
+        text_wrap = max([len(h.get_label() or []) for h in handles]) # pyright: ignore[reportArgumentType]
+    if isinstance(text_wrap, int):
+        title = textwrap.fill(title, text_wrap)
     
     legend = ax.legend(
         handles=handles,
         title = title,
         loc = loc,
         fontsize = fontsize,
-        title_fontsize = title_fontsize
+        title_fontsize = title_fontsize,
+        ncols = ncols,
+        **kwargs
     )
     legend.get_title().set_multialignment('center')
     ax.set_facecolor('none')  # No background color

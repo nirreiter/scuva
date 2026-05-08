@@ -15,16 +15,17 @@ from scanpy.get import obs_df
 
 from typing import Literal, Any
 
-from . import DEFAULT_CMAP, DPI, _set_default_colors_categorical, get_categorical_colormap, subplots_with_side_axis
+from . import DEFAULT_CMAP, DPI, _set_default_colors_categorical, get_categorical_colormap, subplots_with_legend_axis, _adjust_axis_for_legend
 from ..text import clean_title, rename
 from .legend import make_colorbar, make_legend
+from ..util import is_numeric
 
 
 POINT_SIZE_FACTOR = 1000
 
 
 def _minmax_int_slow_with_zero(data):
-    """Return integer plot bounds that always include zero."""
+    """Return integer plot bounds spanning the data while forcing zero inside them."""
     return int(np.floor(min(min(data), 0))), int(np.ceil(max(max(data), 0)))
 
 
@@ -33,7 +34,11 @@ def _select_point_size(
     xlim: tuple[float, float] | None,
     ylim: tuple[float, float] | None
 ):
-    """Estimate a scatter marker size from the visible embedding extent."""
+    """Estimate a scatter marker size from the visible embedding extent.
+
+    The heuristic uses the visible width and height of the embedding so denser
+    layouts receive smaller points.
+    """
     if xlim is not None:
         x = xlim[1] - xlim[0]
     else:
@@ -53,7 +58,11 @@ def _normalize_bottom_points(
     bottom_points: npt.NDArray[np.intp] | npt.NDArray[np.bool_] | None,
     size: int,
 ) -> npt.NDArray[np.bool_] | None:
-    """Normalize bottom-point selections into a boolean mask."""
+    """Normalize bottom-point selections into a boolean mask.
+
+    Boolean masks are validated and copied. Integer index arrays are converted into
+    a mask of length ``size``.
+    """
     if bottom_points is None:
         return None
 
@@ -91,7 +100,12 @@ def _make_umap_legend(
     legend_renaming: dict[str, str] | None = None,
     **legend_kwargs
 ):
-    """Create a categorical legend for a UMAP panel using AnnData metadata."""
+    """Create a categorical legend for a UMAP panel using AnnData metadata.
+
+    Category order is taken from ``legend_order`` when provided, otherwise from the
+    categorical order stored on ``adata.obs[feature].cat.categories``. Display labels are passed
+    through :func:`rename` before the legend is drawn.
+    """
     categories = list(adata.obs[feature].cat.categories)
     if color_dict is None:
         color_dict = get_categorical_colormap(adata, feature)
@@ -160,8 +174,14 @@ def umap(
         Key in ``adata.obsm`` containing the 2D embedding.
     figsize
         Figure size used when creating new axes.
+    legend_kwargs
+        Extra keyword arguments forwarded to :func:`make_colorbar` for continuous
+        features, to :func:`make_legend` for side legends, or to ``Axes.text`` for
+        on-data categorical labels.
+    legend_order
+        Optional category order for side legends.
     legend_loc
-        Location strategy for categorical legends. 
+        Location strategy for categorical legends. Ignored for numerical data. 
         'right' places a legend outside the graph. 
         'on data' places text on top of the data, intended for cluster-like data.
     legend_renaming
@@ -180,11 +200,15 @@ def umap(
     xlim, ylim
         Optional axis bounds.
     bottom_points
-        Boolean mask identifying points that should be drawn first beneath the rest.
-    legend_kwargs
-        Extra keyword arguments forwarded to :func:`make_colorbar` or to :func:`ax.legend`.
+        Boolean mask or integer index array identifying points that should be drawn
+        first beneath the rest.
+    sort_by_abs
+        For continuous features only, draw points in order of increasing absolute
+        value so larger magnitudes appear on top. When ``False``, points are
+        shuffled instead. For categorical data, points are always shuffled.
     **kwargs
-        Additional keyword arguments forwarded to ``Axes.scatter``.
+        Additional keyword arguments forwarded to every ``Axes.scatter`` call after
+        adding ``edgecolors='none'`` by default.
 
     Returns
     -------
@@ -197,6 +221,12 @@ def umap(
     ValueError
         If the requested data source or UMAP embedding is unavailable, or if the
         colormap configuration does not match the feature type.
+
+    Notes
+    -----
+    Continuous plots first draw every point in light gray, then overplot only the
+    nonzero values in color. For categorical plots, a non-dict ``cmap`` argument is
+    ignored and colors come from ``adata.uns`` or Scanpy defaults.
     """
     #* Argument validation
     if layer is not None and use_raw:
@@ -226,6 +256,10 @@ def umap(
     values = obs_df(adata, keys=[feature], use_raw = use_raw, layer = layer)[feature].to_numpy()
     if len(values) == 0:
         raise ValueError("Feature exists but length of values is zero. There may be no observations in the anndata object.")
+    if not is_categorical and not is_numeric(values):
+        raise ValueError("Columns must be either categorical or numeric for graphing. If you intended to graph a categorical variable, cast the column to categorical like so: "
+                         + f"\nadata.obs[{feature}] = adata.obs[{feature}].astype('category')\n"
+                         + "If you inteded to graph a numeric column, check its values to ensure they are numeric.")
     
     kwargs = dict(
         edgecolors = "none"
@@ -312,19 +346,29 @@ def umap(
             # Use the original (unshuffled) embedding coordinates so masks align
             orig_coords = np.asarray(adata.obsm[umap_obsm_key or "X_umap"])
             for idx, cat in enumerate(groups):
+                _bbox = dict(facecolor="white", edgecolor=colors[idx], boxstyle="round,pad=0.2", alpha=0.7)
+                _legend_kwargs: dict[str, Any] = dict(
+                    fontsize=10, 
+                    weight="bold", 
+                    color="black", 
+                    ha="center", 
+                    va="center",
+                    bbox=_bbox
+                )
+                # replace parameters in legend_kwargs and do smart replace for bbox
+                if legend_kwargs is not None:
+                    _legend_kwargs |= legend_kwargs
+                    if "bbox" in legend_kwargs:
+                        _legend_kwargs["bbox"] = _bbox | legend_kwargs["bbox"]
+                    
                 mask = (adata.obs[feature] == cat).to_numpy()
                 median_x = float(np.median(orig_coords[mask, 0]))
                 median_y = float(np.median(orig_coords[mask, 1]))
                 added_text.append(ax.text(
                     median_x,
                     median_y,
-                    rename(adata, str(cat), legend_renaming),
-                    fontsize=10,
-                    weight="bold",
-                    color="black",
-                    ha="center",
-                    va="center",
-                    bbox=dict(facecolor="white", edgecolor=colors[idx], boxstyle="round,pad=0.2", alpha=0.7)
+                    clean_title(rename(adata, str(cat), legend_renaming)),
+                    **_legend_kwargs
                 ))
             if side_ax:
                 side_ax.axis("off")
@@ -338,7 +382,7 @@ def umap(
                 feature, 
                 color_dict=color_dict,
                 legend_order=legend_order, 
-                legend_renaming=legend_renaming,
+                legend_renaming={k: clean_title(rename(adata, k, legend_renaming)) for k in groups},
                 loc="center left",
                 **(legend_kwargs or {}),
             )
@@ -457,15 +501,33 @@ def umap(
     if ylim is not None:
         ax.set_ylim(*ylim)
     
-    plt.tight_layout()
+    if gs is not None:
+        plt.tight_layout()
     return ax, side_ax, added_text
 
 def multiple_umap(
     adata: AnnData | list[AnnData], 
     features: list[str], 
+    use_raw: bool = False,
+    layer: str | None = None,
     cmap: mplc.Colormap | dict = DEFAULT_CMAP,
-    umap_obsm: str = "X_umap",
-    legend_loc: Literal["on data", "right"] = "on data",
+    umap_obsm_key: str = "X_umap",
+    individual_figsize: tuple[int, int] = (11, 10),
+    ncols: int = 2,
+    legend_kwargs: dict[str, Any] | None = None,
+    legend_order: list | np.ndarray | None = None,
+    legend_loc: Literal["on data", "right"] | list[Literal["on data", "right"]]= "on data",
+    legend_renaming: dict[str, str] | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    vcenter: float | None = None,
+    s: float | None = None,
+    a: float | None = None,
+    show_grid: bool = False,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+    sort_by_abs: bool = True,
+    **kwargs: Any,
 ):
     """Create a grid of UMAP plots across one or more datasets and features.
 
@@ -475,28 +537,54 @@ def multiple_umap(
         A single AnnData object or a list of AnnData objects to plot.
     features
         Features to visualize for each dataset.
+    use_raw, layer
+        Passed through to :func:`umap` for every panel.
     cmap
         Colormap or categorical color mapping passed through to :func:`umap`.
-    umap_obsm
+    umap_obsm_key
         Key in ``adata.obsm`` containing the embedding coordinates.
+    individual_figsize
+        Base figure size allocated per plotted panel before the full grid is
+        assembled.
+    ncols
+        Requested number of plot panels per row. The current layout implementation
+        supports at most two panels per row.
+    legend_kwargs, legend_order, legend_renaming
+        Legend configuration forwarded to :func:`umap` for each panel.
     legend_loc
-        Legend placement strategy forwarded to :func:`umap`.
+        Legend placement strategy forwarded to :func:`umap`. A list value is cycled
+        across panels.
+    vmin, vmax, vcenter, s, a, show_grid, xlim, ylim, sort_by_abs
+        Plotting options forwarded to :func:`umap` for each panel.
+    **kwargs
+        Additional keyword arguments forwarded to :func:`umap`.
 
     Returns
     -------
     matplotlib.figure.Figure
         The figure containing all generated panels.
+
+    Notes
+    -----
+    This helper always passes ``bottom_points=None`` to the underlying
+    :func:`umap` calls. The current grid construction assumes one or two plot panels
+    per row.
     """
     if isinstance(adata, AnnData):
         adata = [adata]
+    if isinstance(legend_loc, str):
+        legend_loc = [legend_loc]
     
     ngraphs = len(adata) * len(features)
-    w = 2 if ngraphs > 1 else 1
+    w = min(ngraphs, ncols)
     h = int(np.ceil(ngraphs / w))
     fig, axes = plt.subplots(
-        h, 2 if w == 1 else 5, figsize=(11 if w == 1 else 25, 10 * h), 
+        h, 2 if w == 1 else 5, figsize=(
+            individual_figsize[0] * w + 2 * (w - 1), 
+            individual_figsize[1] * h + 1 * (h - 1)
+        ), 
         gridspec_kw = {
-            'width_ratios': [20, 1] if w == 1 else [20, 1, 5, 20, 1],
+            'width_ratios': [10, 1] if w == 1 else [10, 1, 1, 10, 1],
         },
         dpi = DPI,
     )
@@ -516,11 +604,27 @@ def multiple_umap(
                 added_text.append(umap(
                     adata = adata[index // len(features)],
                     feature = features[index % len(features)], 
+                    use_raw = use_raw,
+                    layer = layer,
                     cmap = cmap,
-                    umap_obsm_key = umap_obsm,
-                    legend_loc = legend_loc, 
+                    umap_obsm_key = umap_obsm_key,
+                    legend_kwargs = legend_kwargs,
+                    legend_order = legend_order,
+                    legend_loc = legend_loc[index % len(legend_loc)],
+                    legend_renaming = legend_renaming, 
                     ax = ax, 
                     side_ax = side_ax,
+                    vmin = vmin,
+                    vmax = vmax,
+                    vcenter = vcenter,
+                    s = s,
+                    a = a,
+                    show_grid = show_grid,
+                    xlim = xlim,
+                    ylim = ylim,
+                    bottom_points = None, # Not supported
+                    sort_by_abs = sort_by_abs,
+                    **kwargs
                 )[2])
             else:
                 _clear_axis(ax)
@@ -547,14 +651,15 @@ def umap_split(
     group_key: str,
     umap_obsm_key: str = "X_umap",
     legend_portion: float = 0.1,
+    legend_use_extra_axis: bool = True,
     legend_kws: dict[str, Any] | None = None,
-    legend_loc: Literal["horizontal", "vertical"] = "horizontal",
+    legend_orientation: Literal["horizontal", "vertical"] = "horizontal",
     legend_order: list | np.ndarray | None = None,
     figsize: tuple[int, int] | None = None,
     cmap: mplc.Colormap = DEFAULT_CMAP,
     s: float | None = None,
     a: float | None = None,
-    ncol: int = 2,
+    ncols: int = 2,
     vcenter: float | None = None,
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
@@ -573,22 +678,35 @@ def umap_split(
         Observation column used to split the data into subplots.
     umap_obsm_key
         Key in ``adata.obsm`` containing the embedding coordinates.
+    legend_portion
+        Fraction of the layout reserved for the shared legend or colorbar axis.
+    legend_use_extra_axis
+        When ``True``, reuse an unused subplot cell for the shared legend or
+        colorbar when one is available.
     legend_kws
-        Additional keyword arguments applied to the shared categorical legend.
-    legend_loc
-        Place the shared legend or colorbar below the plots or to their right.
+        Additional keyword arguments applied to the shared legend or colorbar.
+    legend_orientation
+        Place the shared legend or colorbar horizontally (below the plots) or
+        vertically (to the right).
     legend_order
         Optional explicit category ordering for categorical legends.
     figsize
         Figure size for the multi-panel layout.
     cmap
-        Colormap used for continuous data.
+        Colormap used for continuous data or a dictionary for categorical data.
     s
         Scatter marker size. Defaults to a size derived from the embedding extent.
-    ncol
+    a
+        Scatter alpha value forwarded to each subplot.
+    ncols
         Maximum number of subplot columns.
     vcenter
         Optional center value for diverging continuous color scales.
+    xlim, ylim
+        Optional axis bounds applied to every subplot.
+    bottom_points
+        Boolean mask or integer index array identifying points that should be drawn
+        beneath the rest within each subgroup.
     **kwargs
         Additional keyword arguments forwarded to :func:`umap` for each panel.
 
@@ -596,6 +714,10 @@ def umap_split(
     -------
     matplotlib.figure.Figure
         The figure containing the split UMAP panels and shared legend or colorbar.
+
+    Notes
+    -----
+    Panels are created in the order returned by ``adata.obs[group_key].unique()``.
     """
     fig = plt.figure(figsize=figsize or (10, 8), dpi=DPI)  # wider to fit legend or colorbar
     
@@ -605,11 +727,13 @@ def umap_split(
     #     features = [features]
     # return multiple_umap(adatas, features, **kwargs)
     
-    w = min(ncol, len(groups))
+    w = min(ncols, len(groups))
     h = max(1, int(np.ceil(len(groups) / w)))
 
-    axes, side_ax = subplots_with_side_axis(fig, h, w, legend_loc, legend_portion)
-    side_ax.axis("off")
+    axes, legend_ax = subplots_with_legend_axis(
+        fig, len(groups), h, w, legend_orientation, legend_portion, legend_use_extra_axis
+    )
+    legend_ax.axis("off")
     
     X_umap = np.asarray(adata.obsm[umap_obsm_key or "X_umap"])
     s = s if s is not None else _select_point_size(X_umap, xlim, ylim)
@@ -649,6 +773,7 @@ def umap_split(
         umap(
             adata=adata_sub,
             feature=feature,
+            cmap=cmap,
             ax=axes[i],
             side_ax=None,
             umap_obsm_key=umap_obsm_key,
@@ -663,6 +788,10 @@ def umap_split(
         axes[i].set_title(clean_title(rename(adata, str(t))))
         # axes[i].set_xlabel(None)
         # axes[i].set_ylabel(None)
+    
+    # clear any extra axes
+    for i in range(len(groups), len(axes)):
+        _clear_axis(axes[i])
 
     # Add either colorbar or legend
     if is_categorical:
@@ -679,28 +808,31 @@ def umap_split(
         else:
             _set_default_colors_categorical(adata, feature)
         _make_umap_legend(
-            ax=side_ax, 
+            ax=legend_ax,
             adata=adata, 
             feature=feature, 
             color_dict=legend_color_dict,
             legend_order=legend_order,
-            loc=("upper center" if legend_loc == "horizontal" else "center left"),
+            loc=("upper center" if legend_orientation == "horizontal" else "center left"),
             **(legend_kws or {}),
         )
     else:
         colorbar_title = clean_title(rename(adata, feature))
         if feature in adata.var_names:
             colorbar_title += " Expression"
-        side_ax.axis("on")
+        legend_ax.axis("on")
         make_colorbar(
             sm=sm,
-            cax=side_ax,
+            cax=legend_ax,
             label=colorbar_title,
+            orientation=legend_orientation,
             vmin=vmin,
             vmax=vmax,
             vcenter=vcenter,
             **(legend_kws or {}),
         )
-        
+    
     plt.tight_layout()
+    if w * h > len(groups) and legend_use_extra_axis:
+        _adjust_axis_for_legend(legend_ax, legend_orientation, legend_portion)
     return fig
