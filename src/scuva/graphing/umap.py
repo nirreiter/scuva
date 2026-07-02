@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from matplotlib import pyplot as plt
 from matplotlib import colors as mplc
+from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from matplotlib.cm import ScalarMappable
 from matplotlib.gridspec import GridSpec
@@ -135,10 +136,10 @@ def umap(
     layer: str | None = None,
     cmap: mplc.Colormap | dict = DEFAULT_CMAP,
     umap_obsm_key: str = "X_umap",
-    figsize : tuple[int, int] = (10, 5),
+    figsize : tuple[int, int] = (4, 4),
     legend_kwargs: dict[str, Any] | None = None,
     legend_order: list | np.ndarray | None = None,
-    legend_loc: Literal["right", "on data"] = "on data",
+    legend_loc: str | None = "on data",
     legend_renaming: dict[str, str] | None = None,
     ax: Axes | None = None, 
     side_ax: Axes | None = None,
@@ -181,9 +182,13 @@ def umap(
     legend_order
         Optional category order for side legends.
     legend_loc
-        Location strategy for categorical legends. Ignored for numerical data. 
-        'right' places a legend outside the graph. 
+        Location strategy for categorical legends. For continuous plots on newly
+        created axes, ``"outside right"`` also enables the side axis that holds
+        the colorbar.
+        'outside right' places a legend outside the graph. 
         'on data' places text on top of the data, intended for cluster-like data.
+        Any other string places the legend on the same axis as the data.
+        If this argument is set to `None`, no legend is drawn.
     legend_renaming
         Optional label overrides used for legend and title text.
     ax, side_ax
@@ -271,9 +276,13 @@ def umap(
         gs = GridSpec(1, 2, width_ratios=[1, 0.05])
         ax = fig.add_subplot(gs[0, 0])
         if side_ax is None:
-            side_ax = fig.add_subplot(gs[0, 1])
+            if legend_loc == "outside right":
+                side_ax = fig.add_subplot(gs[0, 1])
     else:
         gs = None
+    
+    if is_categorical and legend_loc == "outside right" and not side_ax:
+        raise ValueError("Legend is set outside but there is no side axis provided")
     
     #* Get UMAP graphing parameters
     X_umap = np.asarray(adata.obsm[umap_obsm_key or "X_umap"])
@@ -373,18 +382,24 @@ def umap(
             if side_ax:
                 side_ax.axis("off")
         
-        ##* Legend on the side
-        elif side_ax:
+        ##* Make a legend
+        elif legend_loc is not None:
+            _legend_kwargs: dict[str, Any] = dict(
+                fontsize = 10,
+                hide_borders = legend_loc == "outside right"
+            )
+            if legend_kwargs is not None:
+                _legend_kwargs |= legend_kwargs
             color_dict = dict(zip(groups, colors))
             _make_umap_legend(
-                side_ax, 
+                side_ax if legend_loc == "outside right" else ax, 
                 adata, 
                 feature, 
                 color_dict=color_dict,
                 legend_order=legend_order, 
                 legend_renaming={k: clean_title(rename(adata, k, legend_renaming)) for k in groups},
-                loc="center left",
-                **(legend_kwargs or {}),
+                loc="center left" if legend_loc == "outside right" else legend_loc,
+                **(_legend_kwargs or {}),
             )
             
     #* Continuous data
@@ -512,11 +527,11 @@ def multiple_umap(
     layer: str | None = None,
     cmap: mplc.Colormap | dict = DEFAULT_CMAP,
     umap_obsm_key: str = "X_umap",
-    individual_figsize: tuple[int, int] = (11, 10),
+    individual_figsize: tuple[int, int] = (4, 4),
     ncols: int = 2,
     legend_kwargs: dict[str, Any] | None = None,
     legend_order: list | np.ndarray | None = None,
-    legend_loc: Literal["on data", "right"] | list[Literal["on data", "right"]]= "on data",
+    legend_loc: str | None | list[str | None] = "on data",
     legend_renaming: dict[str, str] | None = None,
     vmin: float | None = None,
     vmax: float | None = None,
@@ -572,8 +587,10 @@ def multiple_umap(
     """
     if isinstance(adata, AnnData):
         adata = [adata]
-    if isinstance(legend_loc, str):
+    if not isinstance(legend_loc, list):
         legend_loc = [legend_loc]
+    if ncols != 1 and ncols != 2:
+        raise ValueError("`ncols` supports only 1 or 2")
     
     ngraphs = len(adata) * len(features)
     w = min(ngraphs, ncols)
@@ -598,9 +615,12 @@ def multiple_umap(
     for y in range(h):
         for x in range(w):
             index = y * w + x
-            ax = axes[y, x*3]
-            side_ax = axes[y, x*3 + 1]
+            ax: Axes = axes[y, x*3]
+            side_ax: Axes = axes[y, x*3 + 1]
             if index < ngraphs:
+                _legend_loc = legend_loc[index % len(legend_loc)]
+                if _legend_loc != "outside right":
+                    _clear_axis(side_ax)
                 added_text.append(umap(
                     adata = adata[index // len(features)],
                     feature = features[index % len(features)], 
@@ -610,7 +630,7 @@ def multiple_umap(
                     umap_obsm_key = umap_obsm_key,
                     legend_kwargs = legend_kwargs,
                     legend_order = legend_order,
-                    legend_loc = legend_loc[index % len(legend_loc)],
+                    legend_loc = _legend_loc,
                     legend_renaming = legend_renaming, 
                     ax = ax, 
                     side_ax = side_ax,
@@ -653,9 +673,9 @@ def umap_split(
     legend_portion: float = 0.1,
     legend_use_extra_axis: bool = True,
     legend_kws: dict[str, Any] | None = None,
-    legend_orientation: Literal["horizontal", "vertical"] = "horizontal",
+    legend_orientation: Literal["horizontal", "vertical"] | None = "horizontal",
     legend_order: list | np.ndarray | None = None,
-    figsize: tuple[int, int] | None = None,
+    figsize: tuple[int, int] = (8, 8),
     cmap: mplc.Colormap = DEFAULT_CMAP,
     s: float | None = None,
     a: float | None = None,
@@ -688,6 +708,7 @@ def umap_split(
     legend_orientation
         Place the shared legend or colorbar horizontally (below the plots) or
         vertically (to the right).
+        If this argument is set to `None`, no legend or colorbar is drawn.
     legend_order
         Optional explicit category ordering for categorical legends.
     figsize
@@ -719,7 +740,7 @@ def umap_split(
     -----
     Panels are created in the order returned by ``adata.obs[group_key].unique()``.
     """
-    fig = plt.figure(figsize=figsize or (10, 8), dpi=DPI)  # wider to fit legend or colorbar
+    fig = plt.figure(figsize=figsize, dpi=DPI)  # wider to fit legend or colorbar
     
     groups = adata.obs[group_key].unique().tolist()
     # adatas = [adata[adata.obs[group_key] == t] for t in groups]
@@ -757,7 +778,7 @@ def umap_split(
         sm = ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         
-        kwargs = {"vmin": vmin, "vmax": vmax, "cmap": cmap} | kwargs
+        kwargs = {"vmin": vmin, "vmax": vmax} | kwargs
         if vcenter is not None:
             kwargs = {"vcenter": vcenter} | kwargs
 
@@ -767,7 +788,6 @@ def umap_split(
         adata_sub = adata[subgroup_mask]
         adata_sub.uns = adata.uns
         
-        kwargs_subplot = kwargs.copy()
         sub_bottom_points = bottom_mask[subgroup_mask] if bottom_mask is not None else None
         
         umap(
@@ -777,13 +797,13 @@ def umap_split(
             ax=axes[i],
             side_ax=None,
             umap_obsm_key=umap_obsm_key,
-            legend_loc="right",
+            legend_loc=None,
             s=s,
             a=a,
             xlim=xlim,
             ylim=ylim,
             bottom_points=sub_bottom_points,
-            **kwargs_subplot,
+            **kwargs,
         )
         axes[i].set_title(clean_title(rename(adata, str(t))))
         # axes[i].set_xlabel(None)
@@ -794,43 +814,44 @@ def umap_split(
         _clear_axis(axes[i])
 
     # Add either colorbar or legend
-    if is_categorical:
-        legend_color_dict = None
-        if isinstance(cmap, dict):
-            categories = adata.obs[feature].cat.categories
-            missing_categories = [category for category in categories if category not in cmap]
-            if missing_categories:
-                raise ValueError(
-                    "Categorical colormap is missing colors for: "
-                    + ", ".join(str(category) for category in missing_categories)
-                )
-            legend_color_dict = {category: cmap[category] for category in categories}
+    if legend_orientation is not None:
+        if is_categorical:
+            legend_color_dict = None
+            if isinstance(cmap, dict):
+                categories = adata.obs[feature].cat.categories
+                missing_categories = [category for category in categories if category not in cmap]
+                if missing_categories:
+                    raise ValueError(
+                        "Categorical colormap is missing colors for: "
+                        + ", ".join(str(category) for category in missing_categories)
+                    )
+                legend_color_dict = {category: cmap[category] for category in categories}
+            else:
+                _set_default_colors_categorical(adata, feature)
+            _make_umap_legend(
+                ax=legend_ax,
+                adata=adata, 
+                feature=feature, 
+                color_dict=legend_color_dict,
+                legend_order=legend_order,
+                loc=("upper center" if legend_orientation == "horizontal" else "center left"),
+                **(legend_kws or {}),
+            )
         else:
-            _set_default_colors_categorical(adata, feature)
-        _make_umap_legend(
-            ax=legend_ax,
-            adata=adata, 
-            feature=feature, 
-            color_dict=legend_color_dict,
-            legend_order=legend_order,
-            loc=("upper center" if legend_orientation == "horizontal" else "center left"),
-            **(legend_kws or {}),
-        )
-    else:
-        colorbar_title = clean_title(rename(adata, feature))
-        if feature in adata.var_names:
-            colorbar_title += " Expression"
-        legend_ax.axis("on")
-        make_colorbar(
-            sm=sm,
-            cax=legend_ax,
-            label=colorbar_title,
-            orientation=legend_orientation,
-            vmin=vmin,
-            vmax=vmax,
-            vcenter=vcenter,
-            **(legend_kws or {}),
-        )
+            colorbar_title = clean_title(rename(adata, feature))
+            if feature in adata.var_names:
+                colorbar_title += " Expression"
+            legend_ax.axis("on")
+            make_colorbar(
+                sm=sm,
+                cax=legend_ax,
+                label=colorbar_title,
+                orientation=legend_orientation,
+                vmin=vmin,
+                vmax=vmax,
+                vcenter=vcenter,
+                **(legend_kws or {}),
+            )
     
     plt.tight_layout()
     if w * h > len(groups) and legend_use_extra_axis:

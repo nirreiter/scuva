@@ -21,6 +21,7 @@ def graph_proportions(
     x: str,
     y: str,
     x_order: Literal["sort"] | list | np.ndarray | None = "sort",
+    y_order: Literal["sort"] | list | np.ndarray | None = "sort",
     figsize: tuple[int, int] = (3, 6),
     legend_proportion: float = 0.1,
     x_tick_rotation: int = 0,
@@ -33,8 +34,9 @@ def graph_proportions(
     combine_small_percentages_other: bool = False,
     ignore_original_colors: bool = False,
     color_override: dict[str, str] | None = None,
+    spines: set[str] = {"left"},
     legend_kwargs: dict[str, Any] | None = None,
-    spines: set[str] = {"left"}
+    **kwargs
 ) -> tuple[DataFrame, Figure, Axes, Axes]:
     """Plot stacked percentages for one observation column across another.
 
@@ -46,7 +48,7 @@ def graph_proportions(
         Observation column used for the bar positions.
     y
         Observation column used for the stacked segments and legend entries.
-    x_order
+    x_order, y_order
         Optional explicit order to apply before plotting. The default value
         ``"sort"`` sorts integer-like categories numerically and other categories in alphabetic order.
     figsize
@@ -89,11 +91,36 @@ def graph_proportions(
     _require_categorical(adata, y)
     
     df = crosstab(adata.obs[x], adata.obs[y])
-    
-    if x_order == "sort":
-        x_order = sort_categories_handle_ints(adata.obs[x].cat.categories)
-    if x_order is not None:
-        df = df.loc[x_order, :]
+
+    ordered_x_categories: list[Any] | None = None
+    if isinstance(x_order, str):
+        if x_order != "sort":
+            raise ValueError("x_order must be 'sort', a sequence of categories, or None")
+        ordered_x_categories = list(sort_categories_handle_ints(adata.obs[x].cat.categories))
+    elif x_order is not None:
+        ordered_x_categories = list(x_order)
+
+    if ordered_x_categories is not None:
+        missing_categories = [category for category in ordered_x_categories if category not in df.index]
+        if missing_categories:
+            raise ValueError(f"x_order contains values not found in '{x}': {missing_categories}")
+        remaining_categories = [category for category in df.index if category not in ordered_x_categories]
+        df = df.loc[[*ordered_x_categories, *remaining_categories], :]
+
+    ordered_y_categories: list[Any] | None = None
+    if isinstance(y_order, str):
+        if y_order != "sort":
+            raise ValueError("y_order must be 'sort', a sequence of categories, or None")
+        ordered_y_categories = list(sort_categories_handle_ints(adata.obs[y].cat.categories))
+    elif y_order is not None:
+        ordered_y_categories = list(reversed(y_order))
+
+    if ordered_y_categories is not None:
+        missing_categories = [category for category in ordered_y_categories if category not in df.columns]
+        if missing_categories:
+            raise ValueError(f"y_order contains values not found in '{y}': {missing_categories}")
+        remaining_categories = [category for category in df.columns if category not in ordered_y_categories]
+        df = df.loc[:, [*ordered_y_categories, *remaining_categories]]
     
     fig = plt.figure(figsize=figsize, dpi=DPI)
     axes, side_ax = subplots_with_legend_axis(fig, 1, 1, 1, "vertical", legend_proportion)
@@ -135,6 +162,8 @@ def graph_proportions(
         for col in small_cols:
             if col in colormap:
                 del colormap[col]
+
+    colormap = {column: colormap[column] for column in df.columns}
     
     bottom = np.zeros(len(df.index))
     x_positions = range(len(df.index))
@@ -145,6 +174,7 @@ def graph_proportions(
             bottom = bottom,
             label = ct,
             color = colormap[ct],
+            **kwargs
         )
 
         # place text in the middle of the bar segments showing the value
@@ -213,7 +243,8 @@ def graph_counts(
     figsize=(6, 3),
     legend_proportion: float = 0.1,
     x_tick_rotation: int = 90,
-    legend_kwargs: dict[str, Any] | None = None
+    legend_kwargs: dict[str, Any] | None = None,
+    **kwargs
 ) -> tuple[DataFrame, Figure, Axes, Axes]:
     """Plot category counts as grouped or stacked bars.
 
@@ -264,11 +295,19 @@ def graph_counts(
     fig = plt.figure(figsize=figsize)
     axes, side_ax = subplots_with_legend_axis(fig, 1, 1, 1, "vertical", legend_proportion)
     ax = axes[0]
-    df.plot.bar(figsize=figsize, stacked=stack, color=colormap, ax=ax, legend=False)
+    df.plot.bar(
+        figsize=figsize, 
+        stacked=stack, 
+        color=colormap, 
+        ax=ax, 
+        legend=False, 
+        **kwargs
+    )
 
     fig.set_dpi(DPI)
     ax.set_axisbelow(True)
-    ax.grid(axis="y")
+    ax.grid(axis="y", visible=True)
+    ax.grid(axis="x", visible=False)
     ax.set_ylabel("Number of Cells")
     ax.set_xlabel(clean_title(rename(adata, x)))
     ax.set_xticks(

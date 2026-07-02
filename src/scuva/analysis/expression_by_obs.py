@@ -8,14 +8,20 @@ import pandas as pd
 import numpy as np
 from scipy import sparse
 
-from .graphing.umap import multiple_umap
+from ..graphing.umap import multiple_umap
 
 
 def _flatten_1d(values) -> np.ndarray:
     """Convert row or column vector outputs into a flat NumPy array."""
     return np.asarray(values).reshape(-1)
 
-def get_expression_by_obs(adata: AnnData, column: str, layer: str | None = "counts"):
+def get_expression_by_obs(
+    adata: AnnData, 
+    column: str, 
+    integer_layer: str | None = "counts",
+    normalized_layer: str | None = None,
+    scoring_layer: str | None = None,
+):
     """Run ``rank_genes_groups`` and join matrix-derived summary columns.
 
     Parameters
@@ -24,10 +30,15 @@ def get_expression_by_obs(adata: AnnData, column: str, layer: str | None = "coun
         AnnData object containing grouped observations and expression values.
     column
         Observation column passed to :func:`scanpy.tl.rank_genes_groups`.
-    layer
-        Layer name forwarded to :func:`scanpy.tl.rank_genes_groups` and used to
-        select the matrix for the appended summary columns. When ``None``, the
-        function uses ``adata.X`` directly.
+    integer_layer
+        Layer used to compute ``percent_expressing``. This layer should contain
+        unnormalized integer counts. When ``None``, the function uses
+        ``adata.raw.X`` if available, otherwise ``adata.X``.
+    normalized_layer
+        Layer used to compute ``average_expression``. When ``None``, the function
+        uses ``adata.raw.X`` if available, otherwise ``adata.X``.
+    scoring_layer
+        Layer name forwarded to :func:`scanpy.tl.rank_genes_groups`.
 
     Returns
     -------
@@ -37,27 +48,42 @@ def get_expression_by_obs(adata: AnnData, column: str, layer: str | None = "coun
 
     Notes
     -----
-    ``percent_expressing`` and ``average_expression`` are both computed from the provided layer or anndata.X.
-    ``average_expression`` is reported on a ``log1p`` scale as log1p(mean(expression))``.
-    When ``layer=None``, adata.X is still assumed to contain raw integer counts. No inverse transform is applied even if ``adata.X`` already contains log-transformed values.
+    When ``scoring_layer`` is ``None`` and ``adata.raw`` exists, gene scores are
+    computed from ``adata.raw``
+    ``percent_expressing`` and ``average_expression`` are computed separately from
+    ``integer_layer`` and ``normalized_layer``.
+    ``average_expression`` is calculated on a linear scale but reported on a ``log1p`` scale.
+    When either summary-layer argument is ``None``, the fallback matrix is
+    ``adata.raw.X`` if present, otherwise ``adata.X``.
     """
-    if layer is None:
+    if integer_layer is None:
         if adata.X is None:
             raise ValueError("No data is present in adata.X")
     else:
-        if layer not in adata.layers:
-            raise ValueError("Expected adata.layers['counts'] to be present")
+        if integer_layer not in adata.layers:
+            raise ValueError(f"Expected adata.layers['{integer_layer}'] to be present")
+    if normalized_layer is None:
+        if adata.X is None:
+            raise ValueError("No data is present in adata.X")
+    else:
+        if normalized_layer not in adata.layers:
+            raise ValueError(f"Expected adata.layers['{normalized_layer}'] to be present")
+    
+    # TODO: Add a check that the provided layer / adata.X is integer data
 
-    sc.tl.rank_genes_groups(adata, groupby=column, method="wilcoxon", layer=layer)
+    sc.tl.rank_genes_groups(adata, groupby=column, method="wilcoxon", 
+                            scoring_layer=scoring_layer, use_raw=(scoring_layer is None and adata.raw is not None))
     df = sc.get.rank_genes_groups_df(adata, group=None)
     df.rename(columns={"group": column}, inplace=True)
     df_pct_expr = []
     for c in df[column].unique():
         subset = adata[adata.obs[column] == c]
-        matrix = subset.layers[layer] if layer is not None else subset.X
-        percent_expressing = ((matrix > 0).sum(axis=0) / len(subset)) * 100
+        subset_main_matrix = subset.raw.X if subset.raw else subset.X
+        integer_matrix = subset.layers[integer_layer] if integer_layer is not None else subset_main_matrix
+        percent_expressing = ((integer_matrix > 0).sum(axis=0) / len(subset)) * 100
         percent_expressing = _flatten_1d(percent_expressing)
-        average_expression = np.log1p(matrix.mean(axis=0))
+        normalized_matrix = subset.layers[normalized_layer] if normalized_layer is not None else subset_main_matrix
+        average_expression = np.log1p(np.expm1(normalized_matrix).mean(axis=0))
         average_expression = _flatten_1d(average_expression)
         
         df_pct_expr.append(pd.DataFrame({
@@ -72,7 +98,7 @@ def get_expression_by_obs(adata: AnnData, column: str, layer: str | None = "coun
         df = df.astype({column: int})
     return df.sort_values([column, "scores"], ascending=[True, False])
 
-#? TODO: allow features from obs?
+#? TODO: allow features from_obs?
 # TODO: fix to allow arbitrary key for filtering (not just clusters)
 def check_expression(
     adata: AnnData, 
@@ -82,7 +108,7 @@ def check_expression(
     cluster_subset: list[str] | None = None,
     score_threshold: float | None = None, 
 ):
-    """Print filtered marker rows and plot the requested features on UMAP.
+    """Filter a marker table and plot the requested features on UMAP.
 
     Parameters
     ----------
@@ -102,9 +128,8 @@ def check_expression(
 
     Returns
     -------
-    None
-        The function prints a filtered summary table and calls
-        :func:`scuva.graphing.umap.multiple_umap` for side-effect plotting.
+    tuple[Figure, pandas.DataFrame]
+        The generated figure together with the filtered summary table.
 
     """
     
@@ -128,13 +153,18 @@ def check_expression(
     if score_threshold is not None:
         e = e.loc[(e.scores >= score_threshold)]
     
-    print(e.loc[e.names.isin(features)]
+    df = (
+        e.loc[e.names.isin(features)]
         .sort_values([cluster_column, "scores"], ascending=[True, False])
-        .loc[:, [cluster_column, "names", "scores", "percent_expressing", "average_expression"]])
-    multiple_umap(
+        .loc[:, [cluster_column, "names", "scores", "percent_expressing", "average_expression"]]
+    )
+        
+    fig = multiple_umap(
         subset, 
         features=[cluster_column] + features,
-        ncols=3,
+        ncols=2,
         legend_loc="on data",
         vmin=0,
     )
+    
+    return fig, df

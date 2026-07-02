@@ -92,6 +92,7 @@ def make_legend(
     title_fontsize: int = 10,
     text_wrap: int | bool = True,
     ncols: int = 1,
+    hide_borders: bool = True,
     **kwargs
 ) -> Legend:
     """Draw a simple square-marker legend on a dedicated axis.
@@ -147,7 +148,8 @@ def make_legend(
         for label in label_order
     ]
     if text_wrap is True:
-        text_wrap = max([len(h.get_label() or []) for h in handles]) # pyright: ignore[reportArgumentType]
+        text_wrap = max(max([len(h.get_label() or []) for h in handles]), 10) # pyright: ignore[reportArgumentType]
+        print(text_wrap)
     if isinstance(text_wrap, int):
         title = textwrap.fill(title, text_wrap)
     
@@ -164,7 +166,8 @@ def make_legend(
     ax.set_facecolor('none')  # No background color
     ax.set_xticks([])
     ax.set_yticks([])
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+    if hide_borders:
+        for spine in ax.spines.values():
+            spine.set_visible(False)
     ax.patch.set_alpha(0)
     return legend

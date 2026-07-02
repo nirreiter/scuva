@@ -38,7 +38,6 @@ The package metadata currently lists these runtime dependencies:
 - Optional display renaming can be stored in `adata.uns["rename_dict"]`.
 - `graph_proportions`, `set_categorical_colors`, and most categorical legend helpers expect the relevant observation columns to be pandas categoricals.
 - `graph_counts` also expects `hue` to be categorical because colors are read from `adata.obs[hue].cat.categories`.
-- `get_expression_by_obs` forwards its `layer` argument to `scanpy.tl.rank_genes_groups` and uses the same matrix again when attaching summary columns.
 
 If a helper depends on one of these conventions, the function usually raises a `ValueError` with a direct explanation when the input does not match.
 
@@ -65,7 +64,7 @@ sc.pp.neighbors(adata, n_neighbors=15, n_pcs=8, use_rep="X_pca")
 sc.tl.umap(adata)
 sc.tl.leiden(adata, resolution=0.5)
 
-scv.umap(adata, "leiden", legend_loc="right")
+scv.umap(adata, "leiden", legend_loc="outside right")
 ```
 
 For a fuller worked example, see the notebook in `test/scuva_test.ipynb`.
@@ -77,21 +76,21 @@ For a fuller worked example, see the notebook in `test/scuva_test.ipynb`.
 Use `umap` for a single panel.
 
 ```python
-scv.umap(adata, "leiden", legend_loc="right")
-scv.umap(adata, "MS4A1", vcenter=0, legend_loc="right")
+scv.umap(adata, "leiden", legend_loc="outside right")
+scv.umap(adata, "MS4A1", vcenter=0, legend_loc="outside right")
 ```
 
 Behavior to be aware of:
 
 - If `feature` is categorical, `scuva` uses categorical colors and draws either a side legend or labels directly on the embedding.
-- If `feature` is continuous, `scuva` builds a colorbar from the value range and treats zeros as background when plotting the colored layer.
+- If `feature` is continuous, `scuva` draws all cells in light gray first and then overlays only the nonzero values in color. A colorbar is added when the layout provides a side axis or if no axes are provided.
 - `bottom_points` can be a boolean mask or an array of indices and is useful for drawing selected cells underneath the rest.
 - `layer` and `use_raw=True` are mutually exclusive.
 
 Use `multiple_umap` to compare several features or several `AnnData` objects in one figure.
 
 ```python
-scv.multiple_umap(adata, ["leiden", "MS4A1"], legend_loc="right")
+scv.multiple_umap(adata, ["leiden", "MS4A1"], legend_loc=["on data", "outside right"])
 ```
 
 Current behavior to keep in mind:
@@ -107,7 +106,7 @@ scv.umap_split(
 	adata,
 	feature="leiden",
 	group_key="sample",
-	legend_loc="vertical",
+	legend_orientation="vertical",
 	figsize=(10, 4),
 )
 ```
@@ -130,13 +129,20 @@ These functions return the summary table together with the figure and axes, whic
 Use `get_expression_by_obs` to run `scanpy.tl.rank_genes_groups` and attach two summary columns to the ranked-gene output:
 
 - `percent_expressing`: percentage of cells with nonzero raw counts.
-- `average_expression`: `log1p(mean(expression))` for the requested expression source.
+- `average_expression`: average of gene expression on a linear scale, then converted back to a log1p-normalized scale.
 
-If `layer=None`, the function assumes `adata.X` contains integer count data and does not reverse any prior `log1p` transform.
-For a typical Scanpy workflow where `adata.X` contains normalized values, pass the layer name that contains raw integer count data.
+`integer_layer` controls the matrix used for `percent_expressing` and defaults to `"counts"`.
+`normalized_layer` controls the matrix used for `average_expression` and defaults to `adata.raw.X` when available, otherwise `adata.X`.
+`scoring_layer` is forwarded to `scanpy.tl.rank_genes_groups`; if it is omitted and `adata.raw` exists, Scanpy scores genes from `adata.raw.X`, otherwise `adata.X`.
+
+For a typical Scanpy workflow, keep raw counts in a layer such as `adata.layers["counts"]` and the normalized counts in the standard `adata.X` matrix.
 
 ```python
-markers = scv.get_expression_by_obs(adata, "leiden", layer="counts")
+markers = scv.get_expression_by_obs(
+	adata,
+	"leiden",
+	integer_layer="counts"
+)
 
 scv.check_expression(
 	adata,
@@ -147,7 +153,7 @@ scv.check_expression(
 )
 ```
 
-`check_expression` prints the selected marker rows and then draws a small UMAP panel set containing the grouping column plus each requested gene.
+`check_expression` returns a `(figure, dataframe)` pair after filtering the marker table and drawing a small UMAP panel set containing the grouping column plus each requested gene.
 
 ### Colors and labels
 
@@ -183,13 +189,13 @@ That renaming is applied by helpers such as `rename`, `umap`, `graph_counts`, an
 
 - `umap(adata, feature, use_raw=False, layer=None, legend_loc="on data", vmin=None, vmax=None, vcenter=None, bottom_points=None, ...)`
 - `multiple_umap(adata, features, layer=None, ncols=2, legend_loc="on data", ...)`
-- `umap_split(adata, feature, group_key, legend_orientation="horizontal", ncols=2, ...)`
+- `umap_split(adata, feature, group_key, legend_orientation="horizontal", ncols=2, bottom_points=None, ...)`
 - `graph_counts(adata, hue, x, stack=False, sort_by_size=True, ...)`
-- `graph_proportions(adata, x, y, x_order="sort", combine_small_percentages_other=False, ...)`
+- `graph_proportions(adata, x, y, y_order="sort", combine_small_percentages_other=False, ...)`
 
 ### Analysis
 
-- `get_expression_by_obs(adata, column, layer="counts")`
+- `get_expression_by_obs(adata, column, integer_layer="counts", normalized_layer=None, scoring_layer=None)`
 - `check_expression(adata, expression_by_obs_df, features, cluster_column="cluster", cluster_subset=None, score_threshold=None)`
 
 ### Legends and color helpers
