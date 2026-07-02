@@ -149,7 +149,6 @@ def make_legend(
     ]
     if text_wrap is True:
         text_wrap = max(max([len(h.get_label() or []) for h in handles]), 10) # pyright: ignore[reportArgumentType]
-        print(text_wrap)
     if isinstance(text_wrap, int):
         title = textwrap.fill(title, text_wrap)
     
