@@ -115,6 +115,7 @@ def _make_umap_legend(
         ordered_categories = [category for category in legend_order if category in color_dict]
     else:
         ordered_categories = [category for category in categories if category in color_dict]
+        ordered_categories += [category for category in color_dict if category not in ordered_categories]
 
     display_color_dict = {
         rename(adata, str(category), legend_renaming): color_dict[category]
@@ -153,6 +154,8 @@ def umap(
     ylim: tuple[float, float] | None = None,
     bottom_points: npt.NDArray[np.intp] | npt.NDArray[np.bool_] | None = None,
     sort_by_abs: bool = True,
+    combine_small_categories_other: bool | list[Any] | np.ndarray = False,
+    other_threshold: float = 1,
     **kwargs: Any,
 ):
     """Plot a UMAP embedding colored by a categorical or continuous feature.
@@ -211,6 +214,14 @@ def umap(
         For continuous features only, draw points in order of increasing absolute
         value so larger magnitudes appear on top. When ``False``, points are
         shuffled instead. For categorical data, points are always shuffled.
+    combine_small_categories_other
+        For categorical features only, either collapse categories whose overall
+        share of observations stays strictly below ``other_threshold`` into an
+        ``Other`` display group when set to ``True``, or pass an explicit list of
+        categories to keep while collapsing every other category into ``Other``.
+        Will fail if a category named ``Other`` already exists.
+    other_threshold
+        Percentage threshold used when ``combine_small_categories_other=True``.
     **kwargs
         Additional keyword arguments forwarded to every ``Axes.scatter`` call after
         adding ``edgecolors='none'`` by default.
@@ -244,6 +255,10 @@ def umap(
     is_categorical = feature in adata.obs and isinstance(adata.obs[feature].dtype, CategoricalDtype)
     if not is_categorical and isinstance(cmap, dict):
         raise ValueError("Colormap can only be a dictionary for categorical data.")
+    if other_threshold < 0 or other_threshold > 100:
+        raise ValueError("other_threshold must be between 0 and 100.")
+    if combine_small_categories_other and not is_categorical:
+        raise ValueError("combine_small_categories_other can only be used with categorical features.")
     
     if umap_obsm_key is None:
         if "X_umap" not in adata.obsm:
@@ -297,23 +312,57 @@ def umap(
     
     #* Categorical data
     if is_categorical:
-        
+        raw_groups = list(adata.obs[feature].cat.categories)
+        group_labels = adata.obs[feature].astype(object).copy()
+        valid_points = group_labels.notna().to_numpy()
+        small_groups: list[Any] = []
+        if combine_small_categories_other:
+            if "Other" in raw_groups:
+                raise ValueError("'Other' is already a value and can't be used to combine small categories!")
+            if isinstance(combine_small_categories_other, (list, np.ndarray)):
+                selected_groups = list(combine_small_categories_other)
+                missing_groups = [group for group in selected_groups if group not in raw_groups]
+                if len(missing_groups) > 0:
+                    raise ValueError(
+                        "combine_small_categories_other contains values not found in the categorical feature: "
+                        + ", ".join(str(group) for group in missing_groups)
+                    )
+                small_groups = [group for group in raw_groups if group not in selected_groups]
+            elif other_threshold > 0:
+                group_percentages = adata.obs[feature].value_counts(normalize=True, sort=False).reindex(raw_groups, fill_value=0) * 100
+                small_groups = group_percentages[group_percentages < other_threshold].index.tolist()
+            if len(small_groups) > 0:
+                group_labels = group_labels.where(~group_labels.isin(small_groups), "Other")
+        groups = list(dict.fromkeys(group_labels[valid_points].tolist()))
+
         ##* get colors for each point
-        groups = adata.obs[feature].cat.categories
         if isinstance(cmap, dict):
             missing_categories = [category for category in groups if category not in cmap]
-            if missing_categories:
+            if combine_small_categories_other and missing_categories == ["Other"]:
+                missing_categories = []
+            if len(missing_categories) > 0:
                 raise ValueError(
                     "Categorical colormap is missing colors for: "
                     + ", ".join(str(category) for category in missing_categories)
                 )
-            colors = np.asarray([cmap[category] for category in groups], dtype=object)
-            point_colors = adata.obs[feature].astype(object).map(cmap).to_numpy()
+            color_dict = {category: cmap[category] for category in groups if category in cmap}
         else:
             _set_default_colors_categorical(adata, feature)
-            colors = np.asarray(adata.uns[feature + "_colors"]) # if (feature + "_colors") in adata.uns else sns.color_palette(n_colors=len(groups))
-            point_codes = adata.obs[feature].cat.codes.to_numpy()
-            point_colors = colors[point_codes]
+            color_dict = get_categorical_colormap(adata, feature)
+
+        if "Other" in groups and "Other" not in color_dict:
+            color_dict["Other"] = "#cccccc"
+        if small_groups:
+            for group in small_groups:
+                color_dict.pop(group, None)
+
+        colors = np.asarray([color_dict[category] for category in groups], dtype=object)
+        point_colors = group_labels.map(color_dict).to_numpy()
+        umap_x = umap_x[valid_points]
+        umap_y = umap_y[valid_points]
+        point_colors = point_colors[valid_points]
+        if bottom_mask is not None:
+            bottom_mask = bottom_mask[valid_points]
         
         ##* shuffle points to prevent 1 group from appearing on top
         shuffle_index = np.arange(len(umap_x))
@@ -370,7 +419,7 @@ def umap(
                     if "bbox" in legend_kwargs:
                         _legend_kwargs["bbox"] = _bbox | legend_kwargs["bbox"]
                     
-                mask = (adata.obs[feature] == cat).to_numpy()
+                mask = (group_labels == cat).to_numpy()
                 median_x = float(np.median(orig_coords[mask, 0]))
                 median_y = float(np.median(orig_coords[mask, 1]))
                 added_text.append(ax.text(
@@ -390,9 +439,10 @@ def umap(
             )
             if legend_kwargs is not None:
                 _legend_kwargs |= legend_kwargs
-            color_dict = dict(zip(groups, colors))
+            legend_ax = side_ax if legend_loc == "outside right" else ax
+            assert legend_ax is not None
             _make_umap_legend(
-                side_ax if legend_loc == "outside right" else ax, 
+                legend_ax,
                 adata, 
                 feature, 
                 color_dict=color_dict,

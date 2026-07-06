@@ -187,7 +187,7 @@ That renaming is applied by helpers such as `rename`, `umap`, `graph_counts`, an
 
 ### Plotting
 
-- `umap(adata, feature, use_raw=False, layer=None, legend_loc="on data", vmin=None, vmax=None, vcenter=None, bottom_points=None, ...)`
+- `umap(adata, feature, use_raw=False, layer=None, legend_loc="on data", vmin=None, vmax=None, vcenter=None, bottom_points=None, combine_small_categories_other=False, other_threshold=1, ...)`
 - `multiple_umap(adata, features, layer=None, ncols=2, legend_loc="on data", ...)`
 - `umap_split(adata, feature, group_key, legend_orientation="horizontal", ncols=2, bottom_points=None, ...)`
 - `graph_counts(adata, hue, x, stack=False, sort_by_size=True, ...)`
