@@ -9,7 +9,7 @@ from .graphing.qc_filtering import qc_metrics_violinplot, qc_metrics_scatterplot
 from .analysis.expression_by_obs import get_expression_by_obs, check_expression
 from .analysis.qc_filtering import is_outlier
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "__version__", 
